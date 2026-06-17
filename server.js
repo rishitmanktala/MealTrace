@@ -307,17 +307,27 @@ function serveStatic(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const pathname = decodeURIComponent(url.pathname);
   const relativePath = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
-  const filePath = path.resolve(ROOT, relativePath);
-  const ext = path.extname(filePath).toLowerCase();
+  let filePath = path.resolve(ROOT, relativePath);
+  let ext = path.extname(filePath).toLowerCase();
+  const isInsideRoot = filePath === ROOT || filePath.startsWith(`${ROOT}${path.sep}`);
 
-  if (!MIME_TYPES[ext] || !filePath.startsWith(ROOT) || !fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+  if (isInsideRoot && !ext && !fs.existsSync(filePath)) {
+    res.writeHead(302, {
+      'Location': `/${url.search}`,
+      'Cache-Control': 'no-cache',
+    });
+    res.end();
+    return;
+  }
+
+  if (!MIME_TYPES[ext] || !isInsideRoot || !fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
     sendText(res, 404, 'Not found');
     return;
   }
 
   res.writeHead(200, {
     'Content-Type': MIME_TYPES[ext] || 'application/octet-stream',
-    'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=3600',
+    'Cache-Control': ext === '.html' || ext === '.js' ? 'no-cache' : 'public, max-age=3600',
   });
   if (req.method === 'HEAD') {
     res.end();

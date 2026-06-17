@@ -21,6 +21,8 @@ let macroChart = null;
 let mediaStream = null;
 let goalsCache = { ...DEFAULT_GOALS };
 let mealLogCache = {};
+let authCallbackCompleted = false;
+let pendingAuthMessage = '';
 
 document.addEventListener('DOMContentLoaded', async () => {
   setNavDate();
@@ -46,6 +48,8 @@ async function initAuth() {
   setAuthMessage('Checking session...');
 
   try {
+    const callback = getAuthCallback();
+    pendingAuthMessage = callback.error ? formatAuthError(new Error(callback.error)) : '';
     const config = await loadAuthConfig();
     supabaseClient = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey, {
       auth: {
@@ -59,21 +63,79 @@ async function initAuth() {
       currentSession = session;
       if (!session) {
         currentUser = null;
-        showAuthScreen();
+        showAuthScreen(pendingAuthMessage || undefined);
       }
     });
 
+    if (callback.error) {
+      cleanAuthCallbackUrl();
+      showAuthScreen(pendingAuthMessage);
+      return;
+    }
+
+    if (callback.tokenHash) {
+      const { data, error } = await supabaseClient.auth.verifyOtp({
+        token_hash: callback.tokenHash,
+        type: callback.type || 'email',
+      });
+      if (error) {
+        cleanAuthCallbackUrl();
+        throw error;
+      }
+      currentSession = data?.session || null;
+      authCallbackCompleted = Boolean(currentSession);
+    }
+
     const { data: sessionData } = await supabaseClient.auth.getSession();
-    currentSession = sessionData?.session || null;
+    currentSession = currentSession || sessionData?.session || null;
     if (!currentSession) {
       showAuthScreen();
       return;
     }
 
+    authCallbackCompleted = authCallbackCompleted || callback.hasSessionTokens;
+    if (callback.hasAuthParams) cleanAuthCallbackUrl();
     await verifyCurrentUser();
   } catch (error) {
-    showAuthScreen(error.message || 'Authentication is not configured yet.');
+    showAuthScreen(formatAuthError(error));
   }
+}
+
+function getAuthCallback() {
+  const query = new URLSearchParams(window.location.search);
+  const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+  const value = key => query.get(key) || hash.get(key) || '';
+  const error = value('error_description') || value('error');
+  const tokenHash = value('token_hash');
+  const type = value('type');
+  const hasSessionTokens = Boolean(value('access_token') && value('refresh_token'));
+  const hasAuthParams = Boolean(error || tokenHash || hasSessionTokens || value('code'));
+  return { error, tokenHash, type, hasSessionTokens, hasAuthParams };
+}
+
+function cleanAuthCallbackUrl() {
+  if (!window.history?.replaceState) return;
+  window.history.replaceState({}, document.title, getAuthRedirectUrl());
+}
+
+function getAuthRedirectUrl() {
+  if (window.location.protocol === 'file:') {
+    return window.location.href.split(/[?#]/)[0];
+  }
+
+  const pathname = window.location.pathname;
+  const appPath = pathname.endsWith('/')
+    ? pathname
+    : pathname.slice(0, pathname.lastIndexOf('/') + 1);
+  return new URL(appPath || '/', window.location.origin).toString();
+}
+
+function formatAuthError(error) {
+  const message = error?.message || 'Authentication is not configured yet.';
+  if (/expired|invalid.*token|token.*invalid/i.test(message)) {
+    return 'This email link is invalid or has expired. Create the account again to receive a new confirmation email.';
+  }
+  return message;
 }
 
 async function loadAuthConfig() {
@@ -128,6 +190,10 @@ async function bootAuthenticatedApp() {
   setAuthLoading(false);
   setAuthMessage('');
   await hydrateSyncedState();
+  if (authCallbackCompleted) {
+    authCallbackCompleted = false;
+    showToast('Email confirmed. You are signed in.');
+  }
 }
 
 function showAuthScreen(message = 'Please sign in to continue.') {
@@ -138,6 +204,7 @@ function showAuthScreen(message = 'Please sign in to continue.') {
 }
 
 async function signIn() {
+  pendingAuthMessage = '';
   if (!supabaseClient) {
     setAuthMessage('Supabase is not configured yet.', true);
     return;
@@ -159,6 +226,7 @@ async function signIn() {
 }
 
 async function signUp() {
+  pendingAuthMessage = '';
   if (!supabaseClient) {
     setAuthMessage('Supabase is not configured yet.', true);
     return;
@@ -168,7 +236,12 @@ async function signUp() {
 
   setAuthLoading(true);
   setAuthMessage('Creating account...');
-  const { data, error } = await supabaseClient.auth.signUp(credentials);
+  const { data, error } = await supabaseClient.auth.signUp({
+    ...credentials,
+    options: {
+      emailRedirectTo: getAuthRedirectUrl(),
+    },
+  });
   if (error) {
     setAuthLoading(false);
     setAuthMessage(error.message, true);

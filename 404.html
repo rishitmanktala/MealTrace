@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Returning to MealTrace</title>
+</head>
+<body>
+  <p>Returning to MealTrace...</p>
+  <script>
+    (() => {
+      const parts = window.location.pathname.split('/').filter(Boolean);
+      const basePath = /\.github\.io$/i.test(window.location.hostname) && parts.length
+        ? `/${parts[0]}/`
+        : '/';
+      window.location.replace(`${window.location.origin}${basePath}${window.location.search}${window.location.hash}`);
+    })();
+  </script>
+</body>
+</html>

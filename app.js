@@ -7,8 +7,8 @@ const STORAGE_KEYS = {
 
 const DEFAULT_GOALS = { calories: 2000, protein: 150, carbs: 250, fat: 65, fiber: 30 };
 const MAX_CLIENT_IMAGE_BYTES = 3.6 * 1024 * 1024;
-const LOCAL_API_ORIGIN = 'http://localhost:4173';
-const PRODUCTION_API_ORIGIN = 'https://mealtrace.onrender.com';
+const SUPABASE_URL = 'https://qpgslwxlfwnguphlybzy.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_cjgs3_wG3asz6JqFe9GEmQ_abRMFNDR';
 const SYNC_DAYS = 30;
 
 let supabaseClient = null;
@@ -50,8 +50,7 @@ async function initAuth() {
   try {
     const callback = getAuthCallback();
     pendingAuthMessage = callback.error ? formatAuthError(new Error(callback.error)) : '';
-    const config = await loadAuthConfig();
-    supabaseClient = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey, {
+    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
@@ -136,32 +135,6 @@ function formatAuthError(error) {
     return 'This email link is invalid or has expired. Create the account again to receive a new confirmation email.';
   }
   return message;
-}
-
-async function loadAuthConfig() {
-  const endpoints = getApiEndpoints('/api/config');
-  let lastError = null;
-
-  for (const endpoint of endpoints) {
-    try {
-      const response = await fetch(endpoint);
-      const config = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(config.error || 'Could not load Supabase configuration.');
-      }
-      if (!config.supabaseUrl || !config.supabaseAnonKey) {
-        throw new Error('Supabase URL and anon key are missing on the server.');
-      }
-      return config;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  if (lastError?.message === 'Failed to fetch') {
-    throw new Error('MealTrace needs the API server for sign-in and analysis. Run node server.js and open http://localhost:4173.');
-  }
-  throw lastError || new Error('Could not load Supabase configuration.');
 }
 
 async function verifyCurrentUser() {
@@ -756,53 +729,17 @@ async function requestMealAnalysis({ imageDataUrl = '', mealDescription = '' }) 
     throw new Error('Please sign in to analyze a meal.');
   }
 
-  const body = JSON.stringify({ imageDataUrl, mealDescription });
-  const endpoints = getAnalysisEndpoints();
-  let lastError = null;
+  const { data, error } = await supabaseClient.functions.invoke('analyze-meal', {
+    body: { imageDataUrl, mealDescription },
+  });
+  if (!error) return data;
 
-  for (const endpoint of endpoints) {
-    try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body,
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(payload.error || `Analysis failed (${response.status})`);
-      }
-      return payload;
-    } catch (error) {
-      lastError = error;
-    }
+  let message = error.message || 'Analysis failed';
+  if (error.context instanceof Response) {
+    const payload = await error.context.json().catch(() => ({}));
+    message = payload.error || message;
   }
-
-  if (lastError?.message === 'Failed to fetch') {
-    throw new Error('Cannot reach the analysis service. Start the app with `node server.js` and open http://localhost:4173.');
-  }
-  throw lastError || new Error('Analysis failed');
-}
-
-function getAnalysisEndpoints() {
-  return getApiEndpoints('/api/analyze-meal');
-}
-
-function getApiEndpoints(path) {
-  const sameOrigin = path;
-  if (isGitHubPagesHost()) return [`${PRODUCTION_API_ORIGIN}${path}`];
-  if (window.location.origin === LOCAL_API_ORIGIN) return [sameOrigin];
-  return [sameOrigin, `${LOCAL_API_ORIGIN}${path}`];
-}
-
-function isStaticHost() {
-  return window.location.protocol === 'file:' || isGitHubPagesHost();
-}
-
-function isGitHubPagesHost() {
-  return /\.github\.io$/i.test(window.location.hostname);
+  throw new Error(message);
 }
 
 function normalizeNutrition(n) {
